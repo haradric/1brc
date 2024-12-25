@@ -1,0 +1,23 @@
+[package]
+name = "one_brc"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "1brc"
+path = "src/main.rs"
+
+[dependencies]
+itertools = "0.13.0"
+
+[profile.profiling]
+inherits = "release"
+debug = true
+
+[lints.rust]
+rust-2018-idioms = "deny"
+
+[lints.clippy]
+all = "deny"
+nursery = "warn"
+pedantic = "warn"
