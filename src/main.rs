@@ -1,6 +1,7 @@
-use std::collections::{BTreeMap, HashMap};
+#![feature(slice_split_once)]
 
-use itertools::Itertools;
+use std::collections::HashMap;
+use std::io::Read;
 
 const FILENAME: &str = "measurements_1b.txt";
 
@@ -28,46 +29,48 @@ impl Stats {
         self.count += 1;
     }
 
-    fn finalize(self) -> (f32, f32, f32) {
-        #[allow(clippy::cast_precision_loss)]
-        let avg = self.sum / self.count as f32;
-        (self.min, avg, self.max)
+    #[allow(clippy::cast_precision_loss)]
+    fn avg(&self) -> f32 {
+        self.sum / self.count as f32
     }
 }
 
 fn main() {
+    let mut data = vec![];
+    std::fs::File::open(FILENAME)
+        .expect("Failed to open the file")
+        .read_to_end(&mut data)
+        .expect("Failed to read the file");
+    assert!(data.pop() == Some(b'\n'));
+
     let mut measurements = HashMap::new();
+    for line in data.split(|&c| c == b'\n') {
+        let (station, value) = line
+            .split_once(|&c| c == b';')
+            .expect("Invalid line format");
 
-    std::fs::read_to_string(FILENAME)
-        .expect("Failed to read the file")
-        .lines()
-        .for_each(|line| {
-            let (station, value) = line.split_once(';').expect("Invalid line format");
-            let value = value.parse::<f32>().expect("Invalid value format");
+        let value = unsafe { std::str::from_utf8_unchecked(value) }
+            .parse::<f32>()
+            .expect("Invalid value format");
 
-            measurements
-                .entry(station.to_owned())
-                .and_modify(|entry: &mut Stats| {
-                    entry.add(value);
-                })
-                .or_insert_with(|| {
-                    let mut entry = Stats::new();
-                    entry.add(value);
-                    entry
-                });
-        });
+        measurements
+            .entry(station)
+            .or_insert(Stats::new())
+            .add(value);
+    }
 
-    let results = measurements
-        .into_iter()
-        .map(|(station, stats)| (station, stats.finalize()))
-        .collect::<BTreeMap<String, (f32, f32, f32)>>();
+    let mut results = measurements.into_iter().collect::<Vec<_>>();
+    results.sort_unstable_by_key(|entry| entry.0);
 
     print!("{{");
-    #[allow(unstable_name_collisions)]
-    results
-        .iter()
-        .map(|(station, (min, avg, max))| format!("{station}={min:.1}/{avg:.1}/{max:.1}"))
-        .intersperse(", ".to_string())
-        .for_each(|s| print!("{s}"));
+    for (station, stats) in &results {
+        print!(
+            "{:}={:.1}/{:.1}/{:.1}, ",
+            std::str::from_utf8(station).expect("Invalid station name"),
+            stats.min,
+            stats.avg(),
+            stats.max
+        );
+    }
     println!("}}");
 }
