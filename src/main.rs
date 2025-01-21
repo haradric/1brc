@@ -1,6 +1,5 @@
 #![feature(slice_split_once)]
 
-use std::collections::HashMap;
 use std::io::Read;
 
 const FILENAME: &str = "measurements_1b.txt";
@@ -35,6 +34,18 @@ impl Stats {
     const fn avg(&self) -> i32 {
         self.sum / self.count as i32
     }
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn str_to_key(name: &[u8]) -> u64 {
+    let mut key = [0u8; 8];
+
+    let length = name.len().min(8);
+
+    key[..length].copy_from_slice(&name[..length]);
+    key[0] ^= name.len() as u8;
+
+    u64::from_ne_bytes(key)
 }
 
 fn parse_to_fixed_point(mut s: &[u8]) -> i32 {
@@ -76,23 +87,24 @@ fn main() {
         .expect("Failed to read the file");
     assert!(data.pop() == Some(b'\n'));
 
-    let mut measurements = HashMap::new();
+    let mut measurements = std::collections::HashMap::new();
     for line in data.split(|&c| c == b'\n') {
         let (station, value) = line
             .split_once(|&c| c == b';')
             .expect("Invalid line format");
 
         measurements
-            .entry(station)
-            .or_insert(Stats::new())
+            .entry(str_to_key(station))
+            .or_insert((station, Stats::new()))
+            .1
             .add(parse_to_fixed_point(value));
     }
 
     let mut results = measurements.into_iter().collect::<Vec<_>>();
-    results.sort_unstable_by_key(|entry| entry.0);
+    results.sort_unstable_by_key(|(_key, value)| value.0);
 
     print!("{{");
-    for (station, stats) in &results {
+    for (_, (station, stats)) in &results {
         print!(
             "{:}={:.1}/{:.1}/{:.1}, ",
             std::str::from_utf8(station).expect("Invalid station name"),
