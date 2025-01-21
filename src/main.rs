@@ -1,6 +1,6 @@
-#![feature(slice_split_once)]
-
 use std::io::Read;
+
+use memchr::memchr;
 
 const FILENAME: &str = "measurements_1b.txt";
 
@@ -80,24 +80,32 @@ fn fixed_to_float(value: i32) -> f64 {
 }
 
 fn main() {
-    let mut data = vec![];
+    let mut buf = vec![];
     std::fs::File::open(FILENAME)
         .expect("Failed to open the file")
-        .read_to_end(&mut data)
+        .read_to_end(&mut buf)
         .expect("Failed to read the file");
-    assert!(data.pop() == Some(b'\n'));
 
+    let mut data = &buf[..];
     let mut measurements = std::collections::HashMap::new();
-    for line in data.split(|&c| c == b'\n') {
-        let (station, value) = line
-            .split_once(|&c| c == b';')
-            .expect("Invalid line format");
+    loop {
+        let Some(station_length) = memchr(b';', data) else {
+            break;
+        };
+
+        // 1 for the separator
+        let value_length = memchr(b'\n', &data[station_length + 1..]).expect("Invalid format");
+        let station = &data[..station_length];
+        let value = &data[station_length + 1..station_length + 1 + value_length];
 
         measurements
             .entry(str_to_key(station))
             .or_insert((station, Stats::new()))
             .1
             .add(parse_to_fixed_point(value));
+
+        // 1 for the separator and 1 for the newline
+        data = &data[station_length + 1 + value_length + 1..];
     }
 
     let mut results = measurements.into_iter().collect::<Vec<_>>();
