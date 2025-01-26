@@ -5,34 +5,67 @@ use std::io::Read;
 
 const FILENAME: &str = "measurements_1b.txt";
 
+// values stored as fixed point numbers
 struct Stats {
-    min: f32,
-    max: f32,
-    sum: f32,
+    min: i32,
+    max: i32,
+    sum: i32,
     count: usize,
 }
 
 impl Stats {
     const fn new() -> Self {
         Self {
-            min: f32::INFINITY,
-            max: f32::NEG_INFINITY,
-            sum: 0.0,
+            min: i32::MAX,
+            max: i32::MIN,
+            sum: 0,
             count: 0,
         }
     }
 
-    fn add(&mut self, value: f32) {
+    fn add(&mut self, value: i32) {
         self.min = self.min.min(value);
         self.max = self.max.max(value);
         self.sum += value;
         self.count += 1;
     }
 
-    #[allow(clippy::cast_precision_loss)]
-    fn avg(&self) -> f32 {
-        self.sum / self.count as f32
+    #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::cast_possible_wrap)]
+    const fn avg(&self) -> i32 {
+        self.sum / self.count as i32
     }
+}
+
+fn parse_to_fixed_point(mut s: &[u8]) -> i32 {
+    let sign = if s.starts_with(b"-") {
+        s = &s[1..];
+        -1
+    } else {
+        1
+    };
+
+    // 98.7 -> 987
+    // 10 * a + b + 0.1 * c -> 100 * a + 10 * b + c
+    let (a, b, c) = match s {
+        [a, b, b'.', c] => (
+            i32::from(*a) - i32::from(b'0'),
+            i32::from(*b) - i32::from(b'0'),
+            i32::from(*c) - i32::from(b'0'),
+        ),
+        [b, b'.', c] => (
+            0i32,
+            i32::from(*b) - i32::from(b'0'),
+            i32::from(*c) - i32::from(b'0'),
+        ),
+        _ => panic!("Invalid format for {s:?}"),
+    };
+
+    sign * (100 * a + 10 * b + c)
+}
+
+fn fixed_to_float(value: i32) -> f64 {
+    f64::from(value) / 10.0
 }
 
 fn main() {
@@ -49,14 +82,10 @@ fn main() {
             .split_once(|&c| c == b';')
             .expect("Invalid line format");
 
-        let value = unsafe { std::str::from_utf8_unchecked(value) }
-            .parse::<f32>()
-            .expect("Invalid value format");
-
         measurements
             .entry(station)
             .or_insert(Stats::new())
-            .add(value);
+            .add(parse_to_fixed_point(value));
     }
 
     let mut results = measurements.into_iter().collect::<Vec<_>>();
@@ -67,10 +96,30 @@ fn main() {
         print!(
             "{:}={:.1}/{:.1}/{:.1}, ",
             std::str::from_utf8(station).expect("Invalid station name"),
-            stats.min,
-            stats.avg(),
-            stats.max
+            fixed_to_float(stats.min),
+            fixed_to_float(stats.avg()),
+            fixed_to_float(stats.max)
         );
     }
     println!("}}");
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn parse_to_fixed_point() {
+        use super::parse_to_fixed_point;
+
+        assert_eq!(parse_to_fixed_point(b"98.7"), 987);
+        assert_eq!(parse_to_fixed_point(b"10.0"), 100);
+        assert_eq!(parse_to_fixed_point(b"9.8"), 98);
+        assert_eq!(parse_to_fixed_point(b"0.9"), 9);
+        assert_eq!(parse_to_fixed_point(b"0.1"), 1);
+        assert_eq!(parse_to_fixed_point(b"0.0"), 0);
+        assert_eq!(parse_to_fixed_point(b"-0.1"), -1);
+        assert_eq!(parse_to_fixed_point(b"-0.9"), -9);
+        assert_eq!(parse_to_fixed_point(b"-9.8"), -98);
+        assert_eq!(parse_to_fixed_point(b"-10.0"), -100);
+        assert_eq!(parse_to_fixed_point(b"-98.7"), -987);
+    }
 }
