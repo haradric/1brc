@@ -88,17 +88,9 @@ fn fixed_to_float(value: i32) -> f64 {
     f64::from(value) / 10.0
 }
 
-fn read_file(path: &str) -> Vec<u8> {
-    use std::io::Read;
-
-    let mut buf = vec![];
-
-    std::fs::File::open(path)
-        .expect("Failed to open the file")
-        .read_to_end(&mut buf)
-        .expect("Failed to read the file");
-
-    buf
+fn read_file(path: &str) -> memmap2::Mmap {
+    let file = std::fs::File::open(path).expect("Failed to open the file");
+    unsafe { memmap2::Mmap::map(&file).expect("Failed to map the file") }
 }
 
 fn process(mut data: &[u8]) -> HashMap<u64, (&[u8], Stats)> {

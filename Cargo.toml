@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 memchr = "2.7.4"
+memmap2 = "0.9.5"
 
 [profile.profiling]
 inherits = "release"
