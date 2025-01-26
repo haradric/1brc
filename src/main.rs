@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::collections::HashMap;
 
 use memchr::memchr;
 
@@ -23,6 +23,7 @@ impl Stats {
     }
 
     fn add(&mut self, value: i32) {
+        assert!((-999..=999).contains(&value));
         self.min = self.min.min(value);
         self.max = self.max.max(value);
         self.sum += value;
@@ -32,7 +33,15 @@ impl Stats {
     #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::cast_possible_wrap)]
     const fn avg(&self) -> i32 {
+        assert!(self.count > 0);
         self.sum / self.count as i32
+    }
+
+    fn merge(&mut self, other: &Self) {
+        self.min = self.min.min(other.min);
+        self.max = self.max.max(other.max);
+        self.sum += other.sum;
+        self.count += other.count;
     }
 }
 
@@ -79,15 +88,22 @@ fn fixed_to_float(value: i32) -> f64 {
     f64::from(value) / 10.0
 }
 
-fn main() {
+fn read_file(path: &str) -> Vec<u8> {
+    use std::io::Read;
+
     let mut buf = vec![];
-    std::fs::File::open(FILENAME)
+
+    std::fs::File::open(path)
         .expect("Failed to open the file")
         .read_to_end(&mut buf)
         .expect("Failed to read the file");
 
-    let mut data = &buf[..];
-    let mut measurements = std::collections::HashMap::new();
+    buf
+}
+
+fn process(mut data: &[u8]) -> HashMap<u64, (&[u8], Stats)> {
+    let mut stats = HashMap::new();
+
     loop {
         let Some(station_length) = memchr(b';', data) else {
             break;
@@ -98,7 +114,7 @@ fn main() {
         let station = &data[..station_length];
         let value = &data[station_length + 1..station_length + 1 + value_length];
 
-        measurements
+        stats
             .entry(str_to_key(station))
             .or_insert((station, Stats::new()))
             .1
@@ -108,7 +124,51 @@ fn main() {
         data = &data[station_length + 1 + value_length + 1..];
     }
 
-    let mut results = measurements.into_iter().collect::<Vec<_>>();
+    stats
+}
+
+fn process_parallel(data: &[u8], jobs: usize) -> HashMap<u64, (&[u8], Stats)> {
+    let mut stats_merged = HashMap::new();
+
+    std::thread::scope(|s| {
+        let step = data.len() / jobs;
+
+        let mut handles = Vec::with_capacity(jobs);
+        let mut first = 0;
+
+        while first + step < data.len() {
+            let last = first + step;
+
+            let pos = memchr(b'\n', &data[last..]).expect("File must end with newline");
+            handles.push(s.spawn(move || process(&data[first..=last + pos])));
+
+            first = last + pos + 1;
+        }
+        handles.push(s.spawn(move || process(&data[first..data.len()])));
+
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .for_each(|item| {
+                for (key, (station, stats)) in item {
+                    stats_merged
+                        .entry(key)
+                        .and_modify(|e: &mut (&[u8], Stats)| e.1.merge(&stats))
+                        .or_insert((station, stats));
+                }
+            });
+    });
+
+    stats_merged
+}
+
+fn main() {
+    let buffer = read_file(FILENAME);
+
+    let jobs = std::thread::available_parallelism().unwrap().get();
+    let stats = process_parallel(&buffer, jobs);
+
+    let mut results = stats.into_iter().collect::<Vec<_>>();
     results.sort_unstable_by_key(|(_key, value)| value.0);
 
     print!("{{");
@@ -126,6 +186,59 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn stats_add() {
+        let mut stats = Stats::new();
+
+        stats.add(123);
+        assert_eq!(stats.min, 123);
+        assert_eq!(stats.max, 123);
+        assert_eq!(stats.sum, 123);
+        assert_eq!(stats.count, 1);
+
+        stats.add(321);
+        assert_eq!(stats.min, 123);
+        assert_eq!(stats.max, 321);
+        assert_eq!(stats.sum, 444);
+        assert_eq!(stats.count, 2);
+
+        stats.add(-456);
+        assert_eq!(stats.min, -456);
+        assert_eq!(stats.max, 321);
+        assert_eq!(stats.sum, -12);
+        assert_eq!(stats.count, 3);
+    }
+
+    #[test]
+    fn stats_avg() {
+        let mut stats = Stats::new();
+        for i in [123, 321, -456] {
+            stats.add(i);
+        }
+        assert_eq!(stats.avg(), -4);
+    }
+
+    #[test]
+    fn stats_merge() {
+        let mut stats1 = Stats::new();
+        for i in [123, 321, -456] {
+            stats1.add(i);
+        }
+
+        let mut stats2 = Stats::new();
+        for i in [456, -678, -987] {
+            stats2.add(i);
+        }
+
+        stats1.merge(&stats2);
+        assert_eq!(stats1.min, -987);
+        assert_eq!(stats1.max, 456);
+        assert_eq!(stats1.sum, -1221);
+        assert_eq!(stats1.count, 6);
+    }
+
     #[test]
     fn parse_to_fixed_point() {
         use super::parse_to_fixed_point;
