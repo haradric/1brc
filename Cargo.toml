@@ -11,6 +11,10 @@ path = "src/main.rs"
 memchr = "2.7.4"
 memmap2 = "0.9.5"
 
+[profile.release]
+lto = true
+codegen-units = 1
+
 [profile.profiling]
 inherits = "release"
 debug = true
